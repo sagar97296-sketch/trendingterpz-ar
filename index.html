@@ -31,6 +31,9 @@
     font-weight: 900; font-size: clamp(22px, 7vw, 32px); -webkit-text-stroke: 1.5px rgba(0,0,0,.55); text-shadow: 0 3px 0 rgba(0,0,0,.35); }
   #loading { position: fixed; inset: 0; z-index: 15; display: flex; align-items: center; justify-content: center; background: #000; font-weight: 700; }
   body.rec #scan, body.rec #handle { display: none !important; }
+  #pick { position: fixed; left: 0; right: 0; top: max(14px, env(safe-area-inset-top)); z-index: 12; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; padding: 0 12px; }
+  #pick button { border: 0; border-radius: 999px; padding: 9px 14px; font: 800 14px system-ui, sans-serif; color: #fff; background: rgba(0,0,0,.55); backdrop-filter: blur(6px); box-shadow: inset 0 0 0 2px rgba(255,255,255,.35); }
+  #pick button.on { color: #1d0b33; background: linear-gradient(180deg, #ffe9a6, #ffb84d); box-shadow: 0 0 14px rgba(255,184,77,.6); }
 </style>
 <script type="importmap">
 { "imports": {
@@ -51,6 +54,7 @@
 <div id="loading" class="hide">Starting camera…</div>
 <div id="scan" class="hide"><div id="frame"><i></i><i></i><i></i><i></i></div><span>Point at the front of the jar</span></div>
 <div id="handle" class="hide">@trendingterpz</div>
+<div id="pick" class="hide"></div>
 
 <script type="module">
 import * as THREE from 'three';
@@ -59,7 +63,15 @@ import { MindARThree } from 'mindar-image-three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const HANDLE = '@trendingterpz';
-const TARGET = 'targets/jars.mind';   // 4 flavors x 3 label slices: anchor i = flavor * 3 + slice
+// ?bottle = test mode with a stand-in object (JB's Klenzmo spray bottle, targets/bottle.jpg cut from a photo):
+// the virtual jar covers the bottle, buttons pick the flavor, and each re-scan moves on to the next flavor
+const BOTTLE = new URLSearchParams(location.search).has('bottle');
+// bottle in target units (target width = 1, centre = 0): radius, bottom of the bottle, tip of the nozzle
+const BOT = { R: 0.54, bottom: -1.6, top: 2.26 };
+// SLICES = label slices per flavor in the .mind file (anchor i = flavor * SLICES + slice); ?mind=&slices= override it for tests
+const SLICES = +(new URLSearchParams(location.search).get('slices') || 8);   // 8 zones = every 45 deg, all the way round
+const ONLY = new URLSearchParams(location.search).get('only');  // dev: the .mind holds one flavor's slices only
+const TARGET = new URLSearchParams(location.search).get('mind') || (BOTTLE ? 'targets/bottle.mind' : 'targets/jars360.mind');   // jar/scripts/cut_zones.py + compile.html?set=jarsy   // 4 flavors x 3 label slices: anchor i = flavor * 3 + slice
 const CROP = 0.25;                 // the target is the front 25% of the label wrap
 const params = new URLSearchParams(location.search);
 const $ = (id) => document.getElementById(id);
@@ -622,23 +634,34 @@ async function start() {
   scene.add(new THREE.HemisphereLight(0xfff4e0, 0x402060, 2.0));
   const sun = new THREE.DirectionalLight(0xffffff, 2.4); sun.position.set(0.4, 1.2, 1.4); scene.add(sun);
   // three slices of the label (front, left, right) so it keeps tracking while the jar turns
-  const anchors = FLAVORS.flatMap((_, f) => [0, 1, 2].map((k) => mindar.addAnchor(f * 3 + k)));
+  const anchors = BOTTLE ? [mindar.addAnchor(0)] : ONLY !== null ? [...Array(SLICES).keys()].map((k) => mindar.addAnchor(k)) : FLAVORS.flatMap((_, f) => [...Array(SLICES).keys()].map((k) => mindar.addAnchor(f * SLICES + k)));
   // the effect lives on a smoothed "stage", not on the raw anchor: no jitter, and it rides through short dropouts
   const stage = new THREE.Group(); stage.matrixAutoUpdate = true; scene.add(stage);
-  const W = await buildJarWorld(stage, renderer); W.cam = camera;
+  const W = await buildJarWorld(stage, renderer); W.cam = camera; W.pick = 0;
+  if (BOTTLE) { // scale the whole show so the jar stands over the bottle, axis on the bottle's axis
+    const J = W.J, k = (BOT.top - BOT.bottom) / (J.top - J.bottom);
+    W.root.scale.setScalar(k); W.root.position.set(0, BOT.bottom - k * J.bottom, k * J.R - BOT.R);
+    const pk = $('pick'); pk.classList.remove('hide');
+    W.showPick = () => [...pk.children].forEach((b, i) => b.classList.toggle('on', i === W.pick));
+    FLAVORS.forEach((F, i) => { const b = document.createElement('button'); b.textContent = F.id.split('_').map((w) => w[0].toUpperCase() + w.slice(1)).join(' ');
+      b.onclick = () => { W.pick = i; W.showPick(); W.getSkin(i); if (W.flavor === i) resetWorld(W); }; pk.appendChild(b); });
+    W.showPick();
+    document.querySelector('#scan span').textContent = 'Point at the bottle';
+    if (params.get('test') === 'pick') setInterval(() => pk.children[(W.pick + 1) % FLAVORS.length].click(), 3500); // dev: tap through the flavors
+  }
   let found = false, lastSeen = -1e9, snap = true, wasHeld = false, lostAt = -1e9;
   const onFound = () => { found = true; window.__found = (window.__found || 0) + 1; }; // the show starts once that flavor is loaded (render loop)
   anchors.forEach((a) => { a.onTargetFound = onFound; a.onTargetLost = () => { found = anchors.some((b) => b.visible); }; });
-  const HOLD = 0.25, R = W.J.R, SLICE = [0, labelAngle(731), labelAngle(1219)], qOff = new THREE.Quaternion(), Yax = new THREE.Vector3(0, 1, 0); // only bridge a blink; camera moved away = effect gone
+  const HOLD = 0.25, R = BOTTLE ? BOT.R : W.J.R, SLICE = [0, labelAngle(731), labelAngle(1219)], qOff = new THREE.Quaternion(), Yax = new THREE.Vector3(0, 1, 0); // only bridge a blink; camera moved away = effect gone
   const pT = new THREE.Vector3(), qT = new THREE.Quaternion(), sT = new THREE.Vector3(), ax = new THREE.Vector3(), upV = new THREE.Vector3(),
     zV = new THREE.Vector3(), xV = new THREE.Vector3(), camP = new THREE.Vector3(), basis = new THREE.Matrix4();
   function trackStage(dt, now) {
     const ai = anchors.findIndex((b) => b.visible), a = anchors[ai];
     if (a) {
-      const fi = Math.floor(ai / 3);
+      const fi = BOTTLE ? W.pick : ONLY !== null ? +ONLY : Math.floor(ai / SLICES);
       if (W.want === null || fi === W.want) W.otherT = 0;
-      else if ((W.otherT = (W.otherT || 0) + dt) < 0.35) { /* keep the current flavor until the new jar is confirmed */ }
-      if (W.want === null || (fi !== W.want && W.otherT >= 0.35)) { W.want = fi; W.otherT = 0; W.getSkin(fi); }
+      else if ((W.otherT = (W.otherT || 0) + dt) < (BOTTLE ? 0 : 0.35)) { /* keep the current flavor until the new jar is confirmed */ }
+      if (W.want === null || (fi !== W.want && W.otherT >= (BOTTLE ? 0 : 0.35))) { W.want = fi; W.otherT = 0; W.getSkin(fi); }
       const M = a.group.matrixWorld; M.decompose(pT, qT, sT);
       const s = sT.x;
       ax.set(0, 0, -R).applyMatrix4(M);                       // jar axis at label height
@@ -656,7 +679,7 @@ async function start() {
     const held = now - lastSeen < HOLD;
     if (!held) snap = true;
     if (wasHeld && !held) lostAt = now;
-    if (held && !wasHeld && W.started && now - lostAt > 1.5) resetWorld(W); // re-scan = the whole show plays again
+    if (held && !wasHeld && W.started && now - lostAt > 1.5) { if (BOTTLE) { W.pick = (W.pick + 1) % FLAVORS.length; W.showPick(); W.getSkin(W.pick); } else resetWorld(W); } // re-scan = the whole show plays again
     wasHeld = held;
     W.root.visible = held && W.flavor !== null && W.flavor === W.want;
     $('scan').classList.toggle('hide', held || !!a);
