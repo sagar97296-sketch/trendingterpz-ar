@@ -1,0 +1,761 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#000000">
+<title>Scan the Jar</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #fff; }
+  #ar { position: fixed; inset: 0; }
+  body.rec #ar { inset: auto; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(100vw, calc(100vh * 9 / 16)); height: min(100vh, calc(100vw * 16 / 9)); }
+  .hide { display: none !important; }
+  #start { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; padding: 24px; text-align: center;
+    background: radial-gradient(120% 80% at 50% 15%, #3a1a7a 0%, #120a2e 50%, #000 100%); }
+  #start h1 { margin: 0; font-size: clamp(36px, 11vw, 60px); line-height: .92; font-weight: 900; text-transform: uppercase;
+    background: linear-gradient(180deg, #fff 0%, #ffd36b 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  #start p { margin: 0; max-width: 300px; opacity: .8; font-size: 16px; line-height: 1.4; }
+  #go { border: 0; border-radius: 999px; padding: 18px 38px; font-size: 18px; font-weight: 800; color: #1d0b33; cursor: pointer;
+    background: linear-gradient(180deg, #ffe9a6, #ffb84d); box-shadow: 0 0 0 4px rgba(255,184,77,.25), 0 10px 40px rgba(180,90,255,.5); }
+  #err { color: #ff8a8a; font-size: 14px; max-width: 320px; }
+  #scan { position: fixed; inset: 0; z-index: 10; pointer-events: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; }
+  #frame { width: min(58vw, 280px); aspect-ratio: 1; position: relative; }
+  #frame i { position: absolute; width: 34px; height: 34px; border: 4px solid #fff; filter: drop-shadow(0 0 6px #b46bff); animation: pulse 1.6s ease-in-out infinite; }
+  #frame i:nth-child(1) { top: 0; left: 0; border-right: 0; border-bottom: 0; border-top-left-radius: 14px; }
+  #frame i:nth-child(2) { top: 0; right: 0; border-left: 0; border-bottom: 0; border-top-right-radius: 14px; }
+  #frame i:nth-child(3) { bottom: 0; left: 0; border-right: 0; border-top: 0; border-bottom-left-radius: 14px; }
+  #frame i:nth-child(4) { bottom: 0; right: 0; border-left: 0; border-top: 0; border-bottom-right-radius: 14px; }
+  #scan span { font-weight: 700; font-size: 16px; padding: 8px 16px; border-radius: 999px; background: rgba(0,0,0,.45); backdrop-filter: blur(6px); }
+  @keyframes pulse { 50% { transform: scale(1.06); opacity: .75; } }
+  #handle { position: fixed; left: 0; right: 0; bottom: max(22px, env(safe-area-inset-bottom)); z-index: 11; text-align: center; pointer-events: none;
+    font-weight: 900; font-size: clamp(22px, 7vw, 32px); -webkit-text-stroke: 1.5px rgba(0,0,0,.55); text-shadow: 0 3px 0 rgba(0,0,0,.35); }
+  #loading { position: fixed; inset: 0; z-index: 15; display: flex; align-items: center; justify-content: center; background: #000; font-weight: 700; }
+  body.rec #scan, body.rec #handle { display: none !important; }
+  #pick { position: fixed; left: 0; right: 0; top: max(14px, env(safe-area-inset-top)); z-index: 12; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; padding: 0 12px; }
+  #pick button { border: 0; border-radius: 999px; padding: 9px 14px; font: 800 14px system-ui, sans-serif; color: #fff; background: rgba(0,0,0,.55); backdrop-filter: blur(6px); box-shadow: inset 0 0 0 2px rgba(255,255,255,.35); }
+  #pick button.on { color: #1d0b33; background: linear-gradient(180deg, #ffe9a6, #ffb84d); box-shadow: 0 0 14px rgba(255,184,77,.6); }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "./vendor/three/three.module.js",
+    "three/addons/": "./vendor/three/addons/",
+    "mindar-image-three": "./vendor/mindar/mindar-image-three.prod.js"
+} }
+</script>
+</head>
+<body>
+<div id="ar"></div>
+<div id="start">
+  <h1>Scan<br>the jar</h1>
+  <p>Point your camera at the front of the jar and get ready for the ride.</p>
+  <button id="go">Start camera</button>
+  <div id="err"></div>
+</div>
+<div id="loading" class="hide">Starting camera…</div>
+<div id="scan" class="hide"><div id="frame"><i></i><i></i><i></i><i></i></div><span>Point at the front of the jar</span></div>
+<div id="handle" class="hide">@trendingterpz</div>
+<div id="pick" class="hide"></div>
+
+<script type="module">
+import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/BufferGeometryUtils.js';
+import { MindARThree } from 'mindar-image-three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const HANDLE = '@trendingterpz';
+// ?bottle = test mode with a stand-in object (JB's Klenzmo spray bottle, targets/bottle.jpg cut from a photo):
+// the virtual jar covers the bottle, buttons pick the flavor, and each re-scan moves on to the next flavor
+const BOTTLE = new URLSearchParams(location.search).has('bottle');
+// bottle in target units (target width = 1, centre = 0): radius, bottom of the bottle, tip of the nozzle
+const BOT = { R: 0.54, bottom: -1.6, top: 2.26 };
+// SLICES = label slices per flavor in the .mind file (anchor i = flavor * SLICES + slice); ?mind=&slices= override it for tests
+const SLICES = +(new URLSearchParams(location.search).get('slices') || 8);   // 8 zones = every 45 deg, all the way round
+const ONLY = new URLSearchParams(location.search).get('only');  // dev: the .mind holds one flavor's slices only
+const TARGET = new URLSearchParams(location.search).get('mind') || (BOTTLE ? 'targets/bottle.mind' : 'targets/jars360.mind');   // jar/scripts/cut_zones.py + compile.html?set=jarsy   // 4 flavors x 3 label slices: anchor i = flavor * 3 + slice
+const CROP = 0.25;                 // the target is the front 25% of the label wrap
+const params = new URLSearchParams(location.search);
+const $ = (id) => document.getElementById(id);
+const REC = params.has('record');
+if (REC) document.body.classList.add('rec');
+
+/* ------------------------------------------------ fake camera from a video file (desktop test / demo recording) */
+let fakeVideo = null;
+if (params.has('fakevideo')) {
+  fakeVideo = document.createElement('video');
+  window.__fake = fakeVideo;
+  // load as a blob so it can seek (the dev server has no Range support)
+  fetch(params.get('fakevideo')).then((r) => r.blob()).then((b) => { fakeVideo.src = URL.createObjectURL(b); });
+  fakeVideo.muted = true; fakeVideo.playsInline = true; fakeVideo.preload = 'auto';
+  const cv = document.createElement('canvas'); const ctx = cv.getContext('2d');
+  navigator.mediaDevices.getUserMedia = async () => {
+    await new Promise((r) => fakeVideo.readyState >= 2 ? r() : fakeVideo.addEventListener('loadeddata', r, { once: true }));
+    cv.width = fakeVideo.videoWidth; cv.height = fakeVideo.videoHeight;
+    const pump = () => { ctx.drawImage(fakeVideo, 0, 0); requestAnimationFrame(pump); }; pump();
+    return cv.captureStream(30);
+  };
+} else if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia && !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+  // desktop webcams only: on phones HD makes the tracker slower (lag), and the phone camera is sharp enough
+  // real camera: ask for HD so the label has more detail to track (MindAR asks for the default ~640x480)
+  const orig = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+  navigator.mediaDevices.getUserMedia = (c = {}) => {
+    const v = typeof c.video === 'object' ? c.video : {};
+    return orig({ ...c, video: { ...v, width: { ideal: 1280 }, height: { ideal: 720 } } }).catch(() => orig(c));
+  };
+}
+
+/* ------------------------------------------------ helpers */
+const rand = (a, b) => a + Math.random() * (b - a);
+const smooth = (x) => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); };
+const easeOutBack = (x) => { x = Math.min(1, Math.max(0, x)); const c1 = 1.9, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
+function paint(geo, color) {
+  geo = geo.index ? geo.toNonIndexed() : geo;
+  const c = new THREE.Color(color), n = geo.attributes.position.count, a = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { a[i * 3] = c.r; a[i * 3 + 1] = c.g; a[i * 3 + 2] = c.b; }
+  geo.setAttribute('color', new THREE.BufferAttribute(a, 3)); return geo;
+}
+function lumpy(geo, amount, seed = 1) {
+  const p = geo.attributes.position, v = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) { v.fromBufferAttribute(p, i); const n = Math.sin(v.x * 9 + seed) * Math.sin(v.y * 7 + seed * 2) * Math.sin(v.z * 8 + seed * 3); v.multiplyScalar(1 + n * amount); p.setXYZ(i, v.x, v.y, v.z); }
+  geo.computeVertexNormals(); return geo;
+}
+function profile(radius, height, corner, segs = 5) {
+  const pts = [new THREE.Vector2(0, -height / 2)];
+  const arc = (cx, cy, a0, a1) => { for (let i = 0; i <= segs; i++) { const a = a0 + (a1 - a0) * i / segs; pts.push(new THREE.Vector2(cx + Math.cos(a) * corner, cy + Math.sin(a) * corner)); } };
+  arc(radius - corner, -height / 2 + corner, -Math.PI / 2, 0); arc(radius - corner, height / 2 - corner, 0, Math.PI / 2);
+  pts.push(new THREE.Vector2(0, height / 2)); return pts;
+}
+function canvasTex(w, h, draw) {
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h; draw(cv.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+const glowSprite = canvasTex(64, 64, (c, w) => { const g = c.createRadialGradient(32, 32, 0, 32, 32, 32); g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.25, 'rgba(255,255,255,.6)'); g.addColorStop(1, 'rgba(255,255,255,0)'); c.fillStyle = g; c.fillRect(0, 0, w, w); });
+
+/* ------------------------------------------------ flavor pieces (what flies out of the open jar) */
+const PIECES = {
+  // banana pudding
+  banana: () => { // slice: cream face, yellow peel ring
+    const face = paint(new THREE.CylinderGeometry(0.5, 0.5, 0.16, 28, 1, true), '#f2c94c');
+    const top = paint(new THREE.CircleGeometry(0.47, 28).rotateX(-Math.PI / 2).translate(0, 0.08, 0), '#fbefc4');
+    const bot = paint(new THREE.CircleGeometry(0.47, 28).rotateX(Math.PI / 2).translate(0, -0.08, 0), '#fbefc4');
+    const seeds = []; for (let i = 0; i < 6; i++) { const a = i / 6 * Math.PI * 2; seeds.push(paint(new THREE.CircleGeometry(0.045, 6).rotateX(-Math.PI / 2).translate(Math.cos(a) * 0.14, 0.081, Math.sin(a) * 0.14), '#8a6a2a')); }
+    return { geo: mergeGeometries([face, top, bot, ...seeds]), size: 0.085, rough: 0.55 };
+  },
+  wafer: () => ({ geo: paint(lumpy(new THREE.LatheGeometry(profile(0.5, 0.2, 0.08), 28), 0.03, 4), '#d9a04f'), size: 0.09, rough: 0.85 }),
+  cream: () => { // whipped dollop: stacked lumpy blobs
+    const a = lumpy(new THREE.SphereGeometry(0.5, 16, 12), 0.15, 3).scale(1, 0.55, 1);
+    const b = lumpy(new THREE.SphereGeometry(0.33, 14, 10), 0.18, 6).translate(0, 0.25, 0);
+    const c = new THREE.ConeGeometry(0.16, 0.3, 10).translate(0, 0.5, 0);
+    return { geo: mergeGeometries([paint(a, '#fffaf0'), paint(b, '#fffaf0'), paint(c, '#fffdf7')]), size: 0.08, rough: 0.6 };
+  },
+  cinnamon: () => { // rolled stick: bark tube, a darker curl inside
+    const outer = paint(new THREE.CylinderGeometry(0.11, 0.11, 1, 12, 1, true), '#7a3a17');
+    const inner = paint(new THREE.CylinderGeometry(0.07, 0.07, 1, 10, 1, true), '#4e200b');
+    const ends = [0.5, -0.5].map((y) => paint(new THREE.RingGeometry(0.07, 0.11, 12).rotateX(y > 0 ? -Math.PI / 2 : Math.PI / 2).translate(0, y, 0), '#5a2810'));
+    return { geo: mergeGeometries([outer, inner, ...ends]), size: 0.13, rough: 0.9 };
+  },
+  drip: () => ({ geo: paint(new THREE.SphereGeometry(0.5, 14, 10), '#ffc93c'), size: 0.04, rough: 0.12, metal: 0.1 }),
+  // coco breeze
+  cocoHalf: () => { // brown shell bowl, white meat ring, coconut milk inside
+    const shell = paint(lumpy(new THREE.SphereGeometry(0.5, 24, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), 0.03, 2), '#5a3216');
+    const meat = paint(new THREE.RingGeometry(0.36, 0.5, 24).rotateX(-Math.PI / 2), '#fffdf6');
+    const milk = paint(new THREE.CircleGeometry(0.37, 24).rotateX(-Math.PI / 2).translate(0, -0.04, 0), '#efe9dc');
+    return { geo: mergeGeometries([shell, meat, milk]), size: 0.11, rough: 0.7 };
+  },
+  cocoChunk: () => ({ geo: mergeGeometries([paint(lumpy(new THREE.BoxGeometry(1, 0.55, 0.7, 3, 2, 2), 0.06, 5), '#fffcf3'),
+    paint(new THREE.BoxGeometry(1.02, 0.12, 0.72).translate(0, -0.32, 0), '#4a2a12')]), size: 0.06, rough: 0.6 }),
+  plumeria: () => { // five white petals, yellow heart
+    const parts = [];
+    for (let i = 0; i < 5; i++) parts.push(paint(new THREE.SphereGeometry(0.5, 12, 8).scale(0.56, 0.1, 0.3).translate(0.3, 0, 0).rotateY(i / 5 * Math.PI * 2), '#fffaf2'));
+    parts.push(paint(new THREE.SphereGeometry(0.15, 10, 8).scale(1, 0.6, 1).translate(0, 0.04, 0), '#ffc93a'));
+    return { geo: mergeGeometries(parts), size: 0.095, rough: 0.5 };
+  },
+  leaf: () => ({ geo: paint(new THREE.SphereGeometry(0.5, 14, 6).scale(1, 0.05, 0.34), '#2fa84a'), size: 0.13, rough: 0.5 }),
+  milk: () => ({ geo: paint(new THREE.SphereGeometry(0.5, 14, 10), '#ffffff'), size: 0.045, rough: 0.15 }),
+  // apple cinnamon
+  appleSlice: () => { // half-moon wedge: pale flesh, green skin on the round edge, two seeds
+    const T = 0.18, side = paint(new THREE.CylinderGeometry(0.5, 0.5, T, 20, 1, true, 0, Math.PI), '#5fd13a');
+    const cap = (y, rx) => paint(new THREE.CircleGeometry(0.47, 20, -Math.PI / 2, Math.PI).rotateX(rx).translate(0, y, 0), '#fff0c8');
+    const cut = paint(new THREE.PlaneGeometry(1, T).rotateY(-Math.PI / 2), '#fff3d2');
+    const seeds = [-0.08, 0.08].map((z) => paint(new THREE.SphereGeometry(0.05, 8, 6).scale(1.6, 0.5, 1).translate(0.12, T / 2 + 0.005, z), '#4a2a12'));
+    return { geo: mergeGeometries([side, cap(T / 2, -Math.PI / 2), cap(-T / 2, Math.PI / 2), cut, ...seeds]), size: 0.1, rough: 0.45 };
+  },
+  apple: () => {
+    const body = paint(lumpy(new THREE.SphereGeometry(0.5, 20, 14).scale(1, 0.9, 1), 0.04, 8), '#6ad43c');
+    const stem = paint(new THREE.CylinderGeometry(0.03, 0.04, 0.25, 6).translate(0, 0.5, 0), '#5a3216');
+    const lf = paint(new THREE.SphereGeometry(0.5, 10, 4).scale(0.36, 0.03, 0.15).translate(0.2, 0.55, 0), '#2fa84a');
+    return { geo: mergeGeometries([body, stem, lf]), size: 0.11, rough: 0.35 };
+  },
+  caramel: () => ({ geo: paint(new THREE.SphereGeometry(0.5, 14, 10).scale(1, 1.25, 1), '#e08a1e'), size: 0.045, rough: 0.1, metal: 0.1 }),
+  // mystery flavor (neon, so they glow like the label)
+  qmark: () => {
+    const pts = []; for (let i = 0; i <= 16; i++) { const a = Math.PI * (1.05 - 1.45 * i / 16); pts.push(new THREE.Vector3(Math.cos(a) * 0.28, 0.3 + Math.sin(a) * 0.24, 0)); }
+    pts.push(new THREE.Vector3(0.02, 0.0, 0), new THREE.Vector3(0, -0.16, 0));
+    const hook = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 40, 0.075, 8, false);
+    const dot = new THREE.SphereGeometry(0.09, 12, 8).translate(0, -0.37, 0);
+    return { geo: mergeGeometries([paint(hook, '#ffffff'), paint(dot, '#ffffff')]), size: 0.15, basic: true, colors: ['#ff4fd8', '#46e3ff', '#c07bff'] };
+  },
+  orb: () => ({ geo: paint(new THREE.SphereGeometry(0.5, 18, 12), '#ffffff'), size: 0.07, rough: 0.12, colors: ['#ff5fc8', '#55dcff', '#9d6bff', '#ffd84a'] }),
+  star: () => {
+    const sh = new THREE.Shape();
+    for (let i = 0; i < 10; i++) { const a = Math.PI / 2 + i / 10 * Math.PI * 2, r = i % 2 ? 0.22 : 0.5; i ? sh.lineTo(Math.cos(a) * r, Math.sin(a) * r) : sh.moveTo(Math.cos(a) * r, Math.sin(a) * r); }
+    const g = new THREE.ExtrudeGeometry(sh, { depth: 0.12, bevelEnabled: true, bevelThickness: 0.04, bevelSize: 0.04, bevelSegments: 1 }).translate(0, 0, -0.06);
+    return { geo: paint(g, '#ffffff'), size: 0.08, basic: true, colors: ['#ffe14a', '#46e3ff', '#ff4fd8'] };
+  },
+  puff: () => ({ geo: paint(lumpy(new THREE.SphereGeometry(0.5, 14, 10), 0.22, 9), '#ffffff'), size: 0.13, basic: true, opacity: 0.38, colors: ['#8a4dff', '#3fa8ff', '#d04dff'] }),
+};
+
+// one entry per flavor, in the same order as the targets in jars.mind (compile.html, set=jars)
+// brand / name: where the lettering is printed on that label (centre + width, label px; scripts/find_decals.py)
+const FLAVORS = [
+  { id: 'banana_pudding', brand: { x: 945, y: 225, w: 500 }, name: { x: 970, y: 340, w: 740 },
+    mix: [['banana', 52], ['wafer', 46], ['cream', 34], ['cinnamon', 16], ['drip', 44]] },
+  { id: 'coco_breeze', brand: { x: 934, y: 252, w: 500 }, name: { x: 974, y: 364, w: 734 },
+    mix: [['cocoHalf', 34], ['cocoChunk', 40], ['plumeria', 30], ['leaf', 18], ['milk', 50]] },
+  { id: 'apple_cinnamon', brand: { x: 955, y: 221, w: 518 }, name: { x: 970, y: 374, w: 990 },
+    mix: [['appleSlice', 46], ['apple', 16], ['cinnamon', 26], ['caramel', 50], ['leaf', 12]] },
+  { id: 'mystery_flavor', brand: { x: 969, y: 222, w: 488 }, name: { x: 980, y: 349, w: 928 },
+    mix: [['qmark', 34], ['orb', 46], ['star', 40], ['puff', 22]] },
+];
+
+// where things sit on the flat label art (label_banana_pudding.jpg, 1950x483 px, wraps the whole jar)
+const LABEL_W = 1950, LABEL_H = 483, TARGET_H = 1258 / 976;          // target is 1 unit wide, this tall
+const labelAngle = (px) => (px - LABEL_W / 2) / LABEL_W * Math.PI * 2;  // 0 = front of the jar
+const labelY = (py) => (LABEL_H / 2 - py) / LABEL_H * TARGET_H;          // anchor units, 0 = label centre
+const SOURCES = [
+  { x: 580, y: 270, w: 120, h: 55 },    // left pudding bowl
+  { x: 1335, y: 270, w: 120, h: 55 },   // right pudding bowl
+  { x: 975, y: 400, w: 480, h: 25 },    // pile of bananas + wafers along the bottom
+];
+
+class Fountain {
+  constructor(parent, J, mix) {
+    this.J = J; this.active = false; this.group = new THREE.Group(); parent.add(this.group);
+    this.sys = mix.map(([type, max]) => {
+      const s = PIECES[type]();
+      const mat = s.basic ? new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false, side: THREE.DoubleSide, transparent: !!s.opacity, opacity: s.opacity || 1, depthWrite: !s.opacity })
+        : new THREE.MeshStandardMaterial({ vertexColors: true, roughness: s.rough, metalness: s.metal || 0, side: THREE.DoubleSide });
+      const mesh = new THREE.InstancedMesh(s.geo, mat, max);
+      if (s.colors) { const cs = s.colors.map((c) => new THREE.Color(c)); for (let i = 0; i < max; i++) mesh.setColorAt(i, cs[i % cs.length]); mesh.instanceColor.needsUpdate = true; }
+      if (s.opacity) mesh.renderOrder = 7;
+      mesh.frustumCulled = false; this.group.add(mesh);
+      const size = s.size * 1.9; // read clearly on a phone screen
+      const ps = []; for (let i = 0; i < max; i++) ps.push({ alive: false, p: new THREE.Vector3(), v: new THREE.Vector3(), r: new THREE.Euler(), w: new THREE.Vector3(), age: 0, life: 1, size, rest: false });
+      return { mesh, ps, size, rate: max / 2.6, acc: 0 };
+    });
+    this.m = new THREE.Matrix4(); this.q = new THREE.Quaternion(); this.s = new THREE.Vector3();
+  }
+  emit(sys, strong, from = 'mouth') {
+    const p = sys.ps.find((x) => !x.alive); if (!p) return;
+    const J = this.J, k = strong ? 1.25 : 1;
+    p.alive = true; p.rest = false; p.age = 0; p.life = rand(2.6, 3.6); p.size = sys.size * rand(0.75, 1.3);
+    p.r.set(rand(0, 6.3), rand(0, 6.3), rand(0, 6.3)); p.w.set(rand(-7, 7), rand(-7, 7), rand(-7, 7));
+    if (from === 'mouth') { // shoots up out of the open jar
+      const a = rand(-1, 1);
+      p.p.set(a * J.rimR * VS * 0.7, J.vy(J.mouth) + 0.02, J.axisZ + rand(0.02, 0.4) * J.R);
+      p.v.set(a * rand(0.3, 0.95) * k + rand(-0.15, 0.15), rand(1.6, 2.5) * k, rand(0.0, 0.45));
+    } else { // born behind the jar (hidden by the product shot) and thrown out past its sides
+      const side = Math.random() < 0.5 ? -1 : 1;
+      p.p.set(side * rand(0, J.jarR * 0.5), rand(J.bottom + 0.5, J.top - 0.1), J.axisZ - J.jarR * 0.45);
+      p.v.set(side * rand(0.55, 1.25) * k, rand(0.9, 1.9) * k, rand(-0.4, 0.0));
+    }
+  }
+  burst(from, frac) { for (const s of this.sys) for (let i = 0; i < s.ps.length * frac; i++) this.emit(s, true, from); }
+  update(dt) {
+    const J = this.J;
+    for (const s of this.sys) {
+      if (this.active) { s.acc += dt * s.rate; while (s.acc >= 1) { s.acc--; this.emit(s, false, Math.random() < 0.65 ? 'mouth' : 'back'); } }
+      s.ps.forEach((p, i) => {
+        if (p.alive) {
+          p.age += dt; if (p.age > p.life) p.alive = false;
+          if (!p.rest) {
+            p.v.y -= 2.4 * dt; p.p.addScaledVector(p.v, dt);
+            p.r.x += p.w.x * dt; p.r.y += p.w.y * dt; p.r.z += p.w.z * dt;
+            // land on the table around the jar (not inside the jar footprint)
+            const dx = p.p.x, dz = p.p.z - J.axisZ, inJar = Math.hypot(dx, dz) < J.footR;
+            if (p.p.y < J.bottom + p.size * 0.3 && !inJar) {
+              p.p.y = J.bottom + p.size * 0.3;
+              if (Math.abs(p.v.y) > 0.6) { p.v.y *= -0.35; p.v.x *= 0.5; p.v.z *= 0.5; p.w.multiplyScalar(0.4); }
+              else { p.rest = true; p.r.x = Math.round(p.r.x / Math.PI) * Math.PI; p.r.z = 0; }
+            }
+            if (inJar && p.p.y < J.top && p.v.y < 0) { // fell back into the jar
+              p.alive = false;
+            }
+          }
+        }
+        const grow = Math.min(1, p.age / 0.12), fade = Math.min(1, (p.life - p.age) / 0.4);
+        const k = p.alive ? p.size * grow * Math.max(0, fade) : 0;
+        this.q.setFromEuler(p.r); this.s.set(k, k, k); this.m.compose(p.p, this.q, this.s); s.mesh.setMatrixAt(i, this.m);
+      });
+      s.mesh.instanceMatrix.needsUpdate = true;
+    }
+  }
+}
+
+/* ------------------------------------------------ subway train: Blender model (jar/train/build_train.py) + Codex-painted steel */
+// a dark room with cyan / pink / white light panels, so the steel reflects the same neon as the jar scene
+function neonEnv(renderer) {
+  const es = new THREE.Scene(); es.background = new THREE.Color(0x05040a);
+  const panel = (c, i, w, h, pos) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: new THREE.Color(c).multiplyScalar(i), side: THREE.DoubleSide }));
+    m.position.set(...pos); m.lookAt(0, 0, 0); es.add(m); };
+  panel(0x30e0ff, 6, 3, 2, [-4, 0.5, 1]); panel(0xff40d0, 6, 3, 2, [4, 0.8, -0.5]);
+  panel(0xffffff, 3, 5, 1.2, [0, 4, 0]); panel(0x8060ff, 2, 6, 1, [0, 0.2, -4]); panel(0xffe0c0, 1.5, 3, 1, [0, 0.6, 4]);
+  const pm = new THREE.PMREMGenerator(renderer), rt = pm.fromScene(es, 0.03); pm.dispose();
+  return rt.texture;
+}
+const TRAIN = { L: 0.40, BOGIE: 0.132 };   // car length, bogie offset from the car centre (car units)
+async function buildTrain(renderer, cars = 5) {
+  const gltf = await new GLTFLoader().loadAsync('jar/train/train.glb');
+  const env = neonEnv(renderer);
+  const masks = { Side: 'side_emit', Front: 'front_emit', Rear: 'rear_emit' }, mt = {};
+  for (const [k, f] of Object.entries(masks)) { mt[k] = await loadTex('jar/train/tex/' + f + '.jpg'); mt[k].flipY = false; }
+  gltf.scene.traverse((o) => {
+    if (!o.isMesh) return;
+    for (const m of [].concat(o.material)) {
+      m.envMap = env; m.envMapIntensity = 1.15;
+      if (m.name === 'Under') { m.color.setRGB(0.012, 0.012, 0.016); m.roughness = 0.55; m.envMapIntensity = 0.7; }
+      if (m.name === 'Wheel') { m.color.setRGB(0.05, 0.05, 0.055); m.envMapIntensity = 1.3; }
+      if (mt[m.name]) { m.emissiveMap = mt[m.name]; m.emissive = new THREE.Color(0xffffff); m.emissiveIntensity = m.name === 'Side' ? 1.25 : 2.2; }
+      m.needsUpdate = true;
+    }
+  });
+  const proto = { front: gltf.scene.getObjectByName('car_front'), mid: gltf.scene.getObjectByName('car_mid'), rear: gltf.scene.getObjectByName('car_rear') };
+  const glow = (color, sc) => { const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowSprite, color, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false })); sp.scale.setScalar(sc); return sp; };
+  const out = [], Z = TRAIN.L / 2 + 0.003;
+  for (let i = 0; i < cars; i++) {
+    const kind = i === 0 ? 'front' : i === cars - 1 ? 'rear' : 'mid';
+    const car = new THREE.Group(), body = proto[kind].clone(); body.position.set(0, 0, 0); car.add(body);
+    if (kind === 'front') {   // glow on the painted lamps (positions from jar/train/guides/layout.json)
+      for (const sx of [-1, 1]) { const g = glow(0xbfe6ff, 0.05); g.position.set(sx * 0.0244, -0.0128, Z); car.add(g); }
+      const r = glow(0xff2a4a, 0.035); r.position.set(0, 0.0275, Z); car.add(r);
+    }
+    if (kind === 'rear') for (const sx of [-1, 1]) { const g = glow(0xff3048, 0.035); g.position.set(sx * 0.0283, -0.0299, -Z); car.add(g); }
+    out.push(car);
+  }
+  return { cars: out, L: TRAIN.L };
+}
+
+// The train flies (no track): it shoots up out of the open jar, then loops forever around it,
+// in front of the label, behind the jar (hidden by the product shot), and swoops out at the phone.
+// cam = camera position in the jar's space (the stage faces the camera, so it is far along +z).
+function flyPath(J, cam) {
+  const ax = new THREE.Vector3(0, 0, J.axisZ), r = J.footR * 1.75, H = J.top - J.bottom;
+  const y = (f) => J.bottom + H * f, P = (x, yy, z) => new THREE.Vector3(x, yy, J.axisZ + z);
+  const toCam = cam.clone().sub(ax); const dist = toCam.length(); toCam.normalize(); window.__camDist = dist;
+  const near = ax.clone().addScaledVector(toCam, Math.min(dist * 0.55, 7.5)); // ~halfway to the phone
+  const rx = J.footR * 2.3, rz = J.footR * 2.7, E = (deg, f) => P(rx * Math.sin(deg * Math.PI / 180), y(f), rz * Math.cos(deg * Math.PI / 180));
+  const loop = [
+    E(200, 0.6), E(250, 0.56), E(300, 0.5),                            // comes out from behind the jar, round the left
+    P(-rx * 0.75, y(0.5), rz * 0.95),                                  // turns out toward the phone...
+    near.clone().add(new THREE.Vector3(r * 0.35, H * 0.08, 0)),         // ...swoops right past the lens
+    P(rx * 1.25, y(0.85), rz * 0.45),                                  // banks away right
+    P(rx * 0.35, y(1.0), -rz * 0.95),                                  // high round the back
+    P(-rx * 1.05, y(0.85), -rz * 0.1),                                 // left, coming down
+    E(-25, 0.42), E(40, 0.4), E(100, 0.5), E(160, 0.6),                // a lap round the jar (front low, back high)
+  ];
+  const loopC = new THREE.CatmullRomCurve3(loop, true, 'centripetal');
+  const start = loop[0], t0 = new THREE.Vector3(); loopC.getTangentAt(0, t0);
+  const s0 = P(J.footR * 0.1, y(0.45), -J.footR * 1.7), s1 = P(-J.footR * 0.35, y(0.47), -J.footR * 1.8);
+  const leadC = new THREE.CatmullRomCurve3([s0, s1, start.clone().addScaledVector(t0, -0.5), start, start.clone().addScaledVector(t0, 0.3)], false, 'centripetal');
+  const leadLen = leadC.getLength() - 0.3 * 0.98, loopLen = loopC.getLength(), back = new THREE.Vector3().subVectors(s0, s1).normalize();
+  return {
+    leadLen, loopLen,
+    at(d, v) { // distance along the flight -> point
+      if (d <= 0) return v.copy(s0).addScaledVector(back, -d);   // before the start: straight on, hidden behind the jar
+      if (d < leadLen) return leadC.getPointAt(Math.min(1, d / leadC.getLength()), v);
+      return loopC.getPointAt((((d - leadLen) / loopLen) % 1 + 1) % 1, v);
+    },
+  };
+}
+
+// light streaks behind the train (pink + cyan, like the logo), camera-facing ribbons along the flight path
+class Streak {
+  constructor(parent, color, n = 48) {
+    this.n = n; this.pos = new Float32Array(n * 2 * 3); this.col = new Float32Array(n * 2 * 4);
+    const idx = []; for (let i = 0; i < n - 1; i++) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(this.pos, 3)); g.setAttribute('color', new THREE.BufferAttribute(this.col, 4)); g.setIndex(idx);
+    this.c = new THREE.Color(color);
+    this.mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }));
+    this.mesh.frustumCulled = false; this.mesh.renderOrder = 4; parent.add(this.mesh);
+  }
+  update(path, dHead, len, w, off, camLocal, alpha) {
+    const p = new THREE.Vector3(), q = new THREE.Vector3(), side = new THREE.Vector3(), view = new THREE.Vector3(), lat = new THREE.Vector3();
+    for (let i = 0; i < this.n; i++) {
+      const f = i / (this.n - 1), d = dHead - f * len;
+      path.at(d, p); path.at(d + 0.05, q); q.sub(p).normalize();
+      lat.crossVectors(q, up).normalize();
+      const c = p.clone().addScaledVector(lat, off).addScaledVector(up, -0.06 * CAR_SCALE);
+      view.subVectors(camLocal, c).normalize(); side.crossVectors(q, view).normalize();
+      const ww = w * (1 - f) * (d > 0 ? 1 : 0), a = alpha * (1 - f) * (1 - f) * (d > 0 ? 1 : 0);
+      for (const [k, sgn] of [[0, 1], [1, -1]]) {
+        this.pos.set([c.x + side.x * ww * sgn, c.y + side.y * ww * sgn, c.z + side.z * ww * sgn], (i * 2 + k) * 3);
+        this.col.set([this.c.r * 1.6, this.c.g * 1.6, this.c.b * 1.6, a], (i * 2 + k) * 4);
+      }
+    }
+    this.mesh.geometry.attributes.position.needsUpdate = true; this.mesh.geometry.attributes.color.needsUpdate = true;
+  }
+}
+
+const CAR_SCALE = 2.5, RING_Y = 0.32, LOGO_W = 0.9, LOGO_Y = 0.72; // logo top ~J.top+1.17 stays in frame
+const VS = 1.2;  // the product shot is a little bigger than the real jar, so the real jar never shows around it
+const backOut = (x) => { x = Math.min(Math.max(x, 0), 1); const c = 1.7; return 1 + (c + 1) * (x - 1) ** 3 + c * (x - 1) ** 2; };
+const clamp01 = (x) => Math.min(1, Math.max(0, x));
+const easeOut = (x) => 1 - (1 - clamp01(x)) ** 3;
+const T_POP = 1.5;  // the cap comes off
+
+// lettering that sits exactly where it is printed on the label, pops out in 3D and keeps moving
+class Decal {
+  constructor(tex, w) {
+    this.h = w * tex.image.height / tex.image.width;
+    this.geo = new THREE.PlaneGeometry(w, this.h, 64, 6);
+    const p = this.geo.attributes.position; this.s0 = new Float32Array(p.count); this.y0 = new Float32Array(p.count);
+    for (let i = 0; i < p.count; i++) { this.s0[i] = p.getX(i); this.y0[i] = p.getY(i); }
+    this.shine = { value: -1 };
+    this.mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.02, toneMapped: false, side: THREE.DoubleSide, depthWrite: false });
+    this.mat.onBeforeCompile = (sh) => { // a light sweep across the letters
+      sh.uniforms.uShine = this.shine;
+      sh.fragmentShader = sh.fragmentShader.replace('void main() {', 'uniform float uShine;\nvoid main() {')
+        .replace('#include <map_fragment>', '#include <map_fragment>\n  float sb = smoothstep(0.10, 0.0, abs(vMapUv.x * 0.8 + vMapUv.y * 0.35 - uShine));\n  diffuseColor.rgb += vec3(1.0, 0.96, 0.88) * sb * 0.9;');
+    };
+    this.mesh = new THREE.Mesh(this.geo, this.mat); this.mesh.renderOrder = 6; this.mesh.frustumCulled = false;
+    // soft shadow of the lettering on the label, so the pop-out reads as real depth
+    this.shadow = new THREE.Mesh(this.geo, new THREE.MeshBasicMaterial({ map: tex, color: 0x000000, transparent: true, opacity: 0, alphaTest: 0.02, depthWrite: false, side: THREE.DoubleSide }));
+    this.shadow.renderOrder = 5; this.shadow.frustumCulled = false;
+  }
+  // wrap on a cylinder of `radius`; `wave` 0..1 = how much it ripples
+  shape(radius, t, wave) {
+    const p = this.geo.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      const s = this.s0[i], y = this.y0[i];
+      const r = radius + wave * (0.03 * Math.sin(s * 7 - t * 4.5) + 0.015 * Math.sin(y * 10 + t * 3.1));
+      const a = s / radius;
+      p.setXYZ(i, r * Math.sin(a), y + wave * 0.018 * Math.sin(s * 5 - t * 3.3), r * Math.cos(a));
+    }
+    p.needsUpdate = true;
+  }
+}
+function addRim(mat, color, k) {
+  const u = { uRimC: { value: new THREE.Color(color) }, uRimK: { value: k } };
+  mat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, u);
+    sh.fragmentShader = sh.fragmentShader.replace('void main() {', 'uniform vec3 uRimC; uniform float uRimK;\nvoid main() {')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n  { float fr = pow(1.0 - abs(dot(normal, normalize(vViewPosition))), 2.6); totalEmissiveRadiance += uRimC * fr * uRimK; }');
+  };
+  return mat;
+}
+
+const loadTex = async (url) => { const t = await new THREE.TextureLoader().loadAsync(url); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t; };
+
+// neon track under the train: dark bed + two glowing rails, following the train's ring
+function buildTrack(curve, drop) {
+  const g = new THREE.Group(), N = 160, pts = curve.getSpacedPoints(N), tan = new THREE.Vector3(), side = new THREE.Vector3(), upv = new THREE.Vector3(0, 1, 0);
+  const bed = [], rails = [[], []];
+  for (let i = 0; i <= N; i++) {
+    const p = pts[i % N]; curve.getTangentAt((i % N) / N, tan); side.crossVectors(tan, upv).normalize();
+    const c = p.clone(); c.y -= drop;
+    const G = 0.038 * CAR_SCALE, B = 0.062 * CAR_SCALE, ry = p.y - 0.0765 * CAR_SCALE - 0.011;
+    bed.push(c.clone().addScaledVector(side, B), c.clone().addScaledVector(side, -B));
+    rails[0].push(c.clone().addScaledVector(side, G).setY(ry)); rails[1].push(c.clone().addScaledVector(side, -G).setY(ry));
+  }
+  const pos = [], idx = [];
+  bed.forEach((v) => pos.push(v.x, v.y, v.z));
+  for (let i = 0; i < N; i++) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+  const bg = new THREE.BufferGeometry(); bg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); bg.setIndex(idx); bg.computeVertexNormals();
+  g.add(new THREE.Mesh(bg, new THREE.MeshStandardMaterial({ color: 0x17131f, roughness: 0.6, metalness: 0.3, side: THREE.DoubleSide })));
+  for (const [k, col] of [[0, 0xff4fd8], [1, 0x52e6ff]]) {
+    const geo = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(rails[k], true), 240, 0.011, 6, true);
+    g.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: col, toneMapped: false })));
+  }
+  // sleepers
+  const sl = new THREE.InstancedMesh(new THREE.BoxGeometry(0.1 * CAR_SCALE, 0.012, 0.03), new THREE.MeshStandardMaterial({ color: 0x3a3346, roughness: 0.8 }), 64);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion();
+  for (let i = 0; i < 64; i++) { const u = i / 64, p = curve.getPointAt(u); curve.getTangentAt(u, tan); q.setFromUnitVectors(new THREE.Vector3(0, 0, 1), tan.setY(0).normalize());
+    m.compose(new THREE.Vector3(p.x, p.y - drop + 0.004, p.z), q, new THREE.Vector3(1, 1, 1)); sl.setMatrixAt(i, m); }
+  g.add(sl);
+  return g;
+}
+
+// a decal sitting exactly where its lettering is printed on the label
+async function mkDecal(W, tex, spec, t0) {
+  const d = new Decal(tex, spec.w / LABEL_W * 4);
+  d.angle = labelAngle(spec.x); d.y = labelY(spec.y) - W.J.bottom; d.t0 = t0;
+  for (const m of [d.mesh, d.shadow]) { m.rotation.y = d.angle; m.position.y = d.y; m.visible = false; W.lab.add(m); }
+  d.shadow.position.y -= 0.03; d.shadow.rotation.y += 0.025;
+  return d;
+}
+// everything that is different per flavor: product shots, the flavor-name lettering, the pieces that fly out
+async function loadSkin(W, i) {
+  const F = FLAVORS[i], dir = 'jar/flavors/' + F.id + '/';
+  const [closed, open, cap, nameTex] = await Promise.all(['card_closed', 'card_open', 'card_cap', 'name'].map((n) => loadTex(dir + n + '.png')));
+  W.brandTex = W.brandTex || loadTex('jar/brand_text.png');
+  const sk = { closed, open, cap, brand: await mkDecal(W, await W.brandTex, F.brand, 0.3), name: await mkDecal(W, nameTex, F.name, 0.7), fountain: new Fountain(W.root, W.J, F.mix) };
+  sk.fountain.group.visible = false;
+  return sk;
+}
+function applySkin(W, i) {
+  for (const [k, sk] of Object.entries(W.ready)) {
+    const on = +k === i; for (const d of [sk.brand, sk.name]) { d.mesh.visible = on; d.shadow.visible = on; }
+    sk.fountain.group.visible = on;
+  }
+  const sk = W.ready[i]; W.flavor = i;
+  W.texClosed = sk.closed; W.texOpen = sk.open; W.capMat.map = sk.cap; W.capMat.needsUpdate = true;
+  W.brand = sk.brand; W.name = sk.name; W.fountain = sk.fountain;
+}
+
+async function buildJarWorld(stage, renderer) {
+  const meta = await (await fetch('jar/jar.json')).json(), card = await (await fetch('jar/cards/card.json')).json();
+  const U = meta.circumference_m * CROP;                 // metres per anchor unit (target width = 1)
+  const toY = (z) => (z - meta.label_center_z) / U;
+  const J = { R: meta.radius_m / U, jarR: meta.jar_radius_m / U, bottom: toY(meta.jar_bottom_z),
+    capBottom: toY(meta.cap_bottom_z), capTop: toY(meta.cap_top_z), capR: meta.cap_radius_m / U, rimR: meta.rim_radius_m / U * 1.16, mouth: toY(meta.cap_top_z) }; // open shot: wide, tall neck (render_jar_cards.py)
+  J.axisZ = -J.R;
+  J.vy = (y) => J.bottom + (y - J.bottom) * VS;          // real-jar height -> product-shot height (it grows up from the table)
+  J.top = J.vy(J.capTop); J.footR = Math.max(J.jarR, J.capR) * VS;
+  const root = new THREE.Group(); stage.add(root);
+  const W = { J, root, t: 0 };
+
+  // ---- product shot: a camera-facing card, pivot on the table at the jar axis
+  const k = card.m_per_px / U, cw = card.w_px * k, ch = card.h_px * k, bx = card.bottom_px[0], by = card.bottom_px[1];
+  W.card = new THREE.Group(); W.card.position.set(0, J.bottom, J.axisZ); root.add(W.card);
+  W.jarMat = new THREE.MeshBasicMaterial({ map: null, transparent: true, alphaTest: 0.03, toneMapped: false });
+  const jg = new THREE.PlaneGeometry(cw, ch); jg.translate((card.w_px / 2 - bx) * k, (by - card.h_px / 2) * k, 0);
+  W.jarCard = new THREE.Mesh(jg, W.jarMat); W.jarCard.renderOrder = 2; W.card.add(W.jarCard);
+  // the cap is its own card, pivot at the cap centre, so it can rattle and flip off
+  const cx = card.cap_px[0], cy = card.cap_px[1];
+  W.cap = new THREE.Group(); W.cap.position.set((cx - bx) * k, (by - cy) * k, 0.002); W.card.add(W.cap); W.cap0 = W.cap.position.clone();
+  const cg = new THREE.PlaneGeometry(cw, ch); cg.translate((card.w_px / 2 - cx) * k, (cy - card.h_px / 2) * k, 0);
+  W.capMat = new THREE.MeshBasicMaterial({ map: null, transparent: true, alphaTest: 0.03, toneMapped: false, depthWrite: false });
+  const capCard = new THREE.Mesh(cg, W.capMat); capCard.renderOrder = 3; W.cap.add(capCard); W.cap.visible = false;
+
+  W.streaks = [new Streak(root, 0xff3fd2), new Streak(root, 0x3fdcff)];
+  const tr = await buildTrain(renderer, 4); W.cars = tr.cars; W.carL = tr.L; W.cars.forEach((c) => root.add(c));
+
+  // brand badge: rises out of the open jar to the top
+  const tex = await loadTex('jar/trending_terpz_logo.png');
+  W.logo = new THREE.Mesh(new THREE.PlaneGeometry(LOGO_W, LOGO_W),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.01, toneMapped: false, side: THREE.DoubleSide, depthTest: false, depthWrite: false }));
+  W.logo.renderOrder = 10; W.logoY = J.top + LOGO_Y; W.logo.position.set(0, W.logoY, J.axisZ); W.logo.visible = false; root.add(W.logo);
+
+  // the label's lettering: the product shot has none printed, decals sit exactly in its place and animate there
+  W.lab = new THREE.Group(); W.lab.position.set(0, J.bottom, J.axisZ); root.add(W.lab);
+  W.skins = {}; W.ready = {}; W.flavor = null; W.want = null;
+  W.getSkin = (i) => W.skins[i] || (W.skins[i] = loadSkin(W, i).then((sk) => { W.ready[i] = sk; return sk; }));
+  root.visible = false;
+  return W;
+}
+
+const tmpC = new THREE.Vector3(), tmpD = new THREE.Vector3(), camL2 = new THREE.Vector3();
+const tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0), mtx = new THREE.Matrix4();
+const camL = new THREE.Vector3(), upW = new THREE.Vector3();
+function resetWorld(W) {
+  W.t = 0; W.erupted = false; W.nextBurst = 0; W.fly = null;
+  W.jarMat.map = W.texClosed; W.jarMat.needsUpdate = true;
+  W.fountain.active = false; W.fountain.sys.forEach((sy) => { sy.acc = 0; sy.ps.forEach((p) => { p.alive = false; }); });
+}
+function updateWorld(W, dt) {
+  const t = (W.t += dt), J = W.J;
+  // the product shot always faces the camera exactly
+  if (W.cam) { W.cam.getWorldPosition(camL); upW.set(0, 1, 0).transformDirection(W.root.matrixWorld); W.card.up.copy(upW); W.card.lookAt(camL); }
+  // 0.00 the product shot pops over the real jar with a flash
+  const gs = VS * (0.93 + 0.07 * backOut(t / 0.35));
+  W.card.scale.setScalar(gs); W.lab.scale.setScalar(gs);
+  const fl = 1 + 1.1 * Math.exp(-t * 6); W.jarMat.color.setScalar(fl); W.capMat.color.setScalar(fl);
+  // the lettering pops out of the label in place, then ripples, shines and bounces
+  for (const d of [W.brand, W.name]) {
+    const lt = t - d.t0, pop = lt > 0 ? backOut(lt / 0.6) : 0, r = J.R * 1.004 + 0.15 * pop;
+    d.shape(r, t, clamp01(lt / 0.8));
+    const punch = 1 + 0.2 * Math.sin(Math.PI * clamp01(lt / 0.45));
+    const hp = ((lt - 1.4) % 4 + 4) % 4, hop = lt > 1.4 && hp < 0.5 ? Math.sin(Math.PI * hp / 0.5) : 0;  // a bounce every 4 s
+    d.mesh.scale.set(punch * (1 - 0.05 * hop), punch * (1 + 0.14 * hop), punch);
+    d.mesh.position.y = d.y + 0.05 * hop;
+    d.shadow.scale.set(J.R * 1.003 / r, 1, J.R * 1.003 / r);
+    d.shadow.material.opacity = 0.55 * clamp01(lt / 0.4) * (1 - 0.3 * hop);
+    const sp = ((lt - 0.5) % 2.6 + 2.6) % 2.6; d.shine.value = lt > 0.5 ? -0.25 + sp * 1.5 : -1;
+  }
+  // 0.9 the cap rattles, T_POP it flips off and hovers up to the left; the jar is open now
+  { const cap = W.cap; cap.visible = true;
+    if (t < T_POP) {
+      const r = clamp01((t - 0.9) / 0.6);
+      cap.position.set(W.cap0.x, W.cap0.y + Math.abs(Math.sin(t * 36)) * 0.03 * r, W.cap0.z); cap.rotation.set(0, 0, Math.sin(t * 50) * 0.05 * r); cap.scale.set(1, 1, 1);
+    } else {
+      if (W.jarMat.map !== W.texOpen) { W.jarMat.map = W.texOpen; W.jarMat.needsUpdate = true; }
+      const c = clamp01((t - T_POP) / 1.0), e = easeOut(c), hov = c >= 1 ? Math.sin((t - T_POP - 1) * 1.6) : 0;
+      cap.position.set(W.cap0.x - 1.15 * e, W.cap0.y + 0.85 * e + 0.5 * Math.sin(Math.PI * c) + 0.03 * hov, W.cap0.z + 0.05);
+      const flip = Math.PI * 3 * e + (c >= 1 ? Math.sin((t - T_POP) * 1.3) * 0.5 : 0);
+      const sc = 1 - 0.42 * e;
+      cap.scale.set(sc, sc * (0.25 + 0.75 * Math.abs(Math.cos(flip))), sc);
+      cap.rotation.set(0, 0, -0.5 * e + 0.08 * hov);
+    } }
+  // T_POP a geyser of flavor out of the open jar; more keeps coming out of the jar and from behind it
+  if (!W.erupted && t > T_POP + 0.05) { W.erupted = true; W.fountain.active = true; W.fountain.burst('mouth', 0.55); W.fountain.burst('back', 0.2); W.nextBurst = t + 3; }
+  if (W.erupted && t > W.nextBurst) { W.fountain.burst('mouth', 0.25); W.nextBurst = t + 3; }
+  W.fountain.update(dt);
+  // the badge rises out of the jar to the top
+  { const b = clamp01((t - T_POP - 0.3) / 0.8); W.logo.visible = t > T_POP + 0.3;
+    W.logo.position.y = J.vy(J.mouth) + (W.logoY - J.vy(J.mouth)) * backOut(b) + (b >= 1 ? Math.sin(t * 1.7) * 0.02 : 0);
+    W.logo.scale.setScalar(Math.max(0.001, 0.2 + 0.8 * backOut(b)));
+    if (W.cam) { W.root.worldToLocal(W.cam.getWorldPosition(tmpA));
+      W.logo.rotation.set(0, Math.atan2(tmpA.x - W.logo.position.x, tmpA.z - W.logo.position.z) + Math.sin(t * 1.1) * 0.12, 0); } }
+  // the train shoots out of the open jar and flies: round the jar, in front of the label, a swoop at the phone
+  const t0 = T_POP + 0.55;
+  if (!W.fly && t > t0 - 0.05 && W.cam) { W.root.worldToLocal(W.cam.getWorldPosition(tmpA)); W.fly = flyPath(J, tmpA.clone()); }
+  const gap = W.carL * CAR_SCALE + 0.05, bo = TRAIN.BOGIE * CAR_SCALE, L2 = W.carL * CAR_SCALE * 0.5;
+  // speed: a fast launch, cruise, and a little faster through the swoop so it whooshes past the lens
+  const tt = Math.max(0, t - t0), dist = 2.4 * tt + 0.3 * Math.sin(tt * 0.9);
+  if (W.cam) W.root.worldToLocal(W.cam.getWorldPosition(camL2));
+  W.cars.forEach((car, i) => {
+    const d = dist - i * gap;
+    if (!W.fly || d < 0) { car.visible = false; return; }
+    car.visible = true;
+    car.scale.setScalar(CAR_SCALE);
+    W.fly.at(d + bo, tmpB); W.fly.at(d - bo, tmpA);
+    car.position.addVectors(tmpA, tmpB).multiplyScalar(0.5);
+    mtx.lookAt(tmpB, tmpA, up); car.quaternion.setFromRotationMatrix(mtx);
+    // bank into the turns
+    W.fly.at(d + bo + 0.6, tmpC); tmpC.sub(tmpB); tmpD.subVectors(tmpB, tmpA);
+    const turn = (tmpD.x * tmpC.z - tmpD.z * tmpC.x) / Math.max(1e-4, tmpD.length() * tmpC.length());
+    car.userData.roll = (car.userData.roll || 0) + (THREE.MathUtils.clamp(turn * 0.9, -0.35, 0.35) - (car.userData.roll || 0)) * Math.min(1, dt * 6);
+    car.rotateZ(car.userData.roll);
+  });
+  if (W.fly) {
+    const tail = dist - (W.cars.length - 1) * gap - L2, a = clamp01(tt / 0.8);
+    W.streaks[0].update(W.fly, tail, 3.2, 0.022 * CAR_SCALE, 0.03 * CAR_SCALE, camL2, 0.85 * a);
+    W.streaks[1].update(W.fly, tail, 3.2, 0.022 * CAR_SCALE, -0.03 * CAR_SCALE, camL2, 0.85 * a);
+  }
+  W.streaks.forEach((k) => { k.mesh.visible = !!W.fly; });
+}
+
+/* ------------------------------------------------ AR + recording */
+async function start() {
+  $('start').classList.add('hide'); $('loading').classList.remove('hide');
+  const mindar = new MindARThree({ container: $('ar'), imageTargetSrc: TARGET, maxTrack: 1, uiLoading: 'no', uiScanning: 'no', uiError: 'no',
+    filterMinCF: 0.001, filterBeta: 0.06, warmupTolerance: 2, missTolerance: 4 }); // beta up = less lag on fast moves; we smooth small shake ourselves
+  const { renderer, scene, camera } = mindar;
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  scene.add(new THREE.HemisphereLight(0xfff4e0, 0x402060, 2.0));
+  const sun = new THREE.DirectionalLight(0xffffff, 2.4); sun.position.set(0.4, 1.2, 1.4); scene.add(sun);
+  // three slices of the label (front, left, right) so it keeps tracking while the jar turns
+  const anchors = BOTTLE ? [mindar.addAnchor(0)] : ONLY !== null ? [...Array(SLICES).keys()].map((k) => mindar.addAnchor(k)) : FLAVORS.flatMap((_, f) => [...Array(SLICES).keys()].map((k) => mindar.addAnchor(f * SLICES + k)));
+  // the effect lives on a smoothed "stage", not on the raw anchor: no jitter, and it rides through short dropouts
+  const stage = new THREE.Group(); stage.matrixAutoUpdate = true; scene.add(stage);
+  const W = await buildJarWorld(stage, renderer); W.cam = camera; W.pick = 0;
+  if (BOTTLE) { // scale the whole show so the jar stands over the bottle, axis on the bottle's axis
+    const J = W.J, k = (BOT.top - BOT.bottom) / (J.top - J.bottom);
+    W.root.scale.setScalar(k); W.root.position.set(0, BOT.bottom - k * J.bottom, k * J.R - BOT.R);
+    const pk = $('pick'); pk.classList.remove('hide');
+    W.showPick = () => [...pk.children].forEach((b, i) => b.classList.toggle('on', i === W.pick));
+    FLAVORS.forEach((F, i) => { const b = document.createElement('button'); b.textContent = F.id.split('_').map((w) => w[0].toUpperCase() + w.slice(1)).join(' ');
+      b.onclick = () => { W.pick = i; W.showPick(); W.getSkin(i); if (W.flavor === i) resetWorld(W); }; pk.appendChild(b); });
+    W.showPick();
+    document.querySelector('#scan span').textContent = 'Point at the bottle';
+    if (params.get('test') === 'pick') setInterval(() => pk.children[(W.pick + 1) % FLAVORS.length].click(), 3500); // dev: tap through the flavors
+  }
+  let found = false, lastSeen = -1e9, snap = true, wasHeld = false, lostAt = -1e9;
+  const onFound = () => { found = true; window.__found = (window.__found || 0) + 1; }; // the show starts once that flavor is loaded (render loop)
+  anchors.forEach((a) => { a.onTargetFound = onFound; a.onTargetLost = () => { found = anchors.some((b) => b.visible); }; });
+  const HOLD = 0.25, R = BOTTLE ? BOT.R : W.J.R, SLICE = [0, labelAngle(731), labelAngle(1219)], qOff = new THREE.Quaternion(), Yax = new THREE.Vector3(0, 1, 0); // only bridge a blink; camera moved away = effect gone
+  const pT = new THREE.Vector3(), qT = new THREE.Quaternion(), sT = new THREE.Vector3(), ax = new THREE.Vector3(), upV = new THREE.Vector3(),
+    zV = new THREE.Vector3(), xV = new THREE.Vector3(), camP = new THREE.Vector3(), basis = new THREE.Matrix4();
+  function trackStage(dt, now) {
+    const ai = anchors.findIndex((b) => b.visible), a = anchors[ai];
+    if (a) {
+      const fi = BOTTLE ? W.pick : ONLY !== null ? +ONLY : Math.floor(ai / SLICES);
+      if (W.want === null || fi === W.want) W.otherT = 0;
+      else if ((W.otherT = (W.otherT || 0) + dt) < (BOTTLE ? 0 : 0.35)) { /* keep the current flavor until the new jar is confirmed */ }
+      if (W.want === null || (fi !== W.want && W.otherT >= (BOTTLE ? 0 : 0.35))) { W.want = fi; W.otherT = 0; W.getSkin(fi); }
+      const M = a.group.matrixWorld; M.decompose(pT, qT, sT);
+      const s = sT.x;
+      ax.set(0, 0, -R).applyMatrix4(M);                       // jar axis at label height
+      upV.setFromMatrixColumn(M, 1).normalize();
+      camera.getWorldPosition(camP); zV.subVectors(camP, ax); zV.addScaledVector(upV, -zV.dot(upV)).normalize(); // face the camera
+      xV.crossVectors(upV, zV).normalize();
+      basis.makeBasis(xV, upV, zV); qT.setFromRotationMatrix(basis);
+      pT.copy(ax).addScaledVector(zV, R * s);
+      // adaptive: tiny moves (jitter) are smoothed hard, real moves follow at once
+      const move = pT.distanceTo(stage.position) / Math.max(s, 1e-6) + qT.angleTo(stage.quaternion) * 0.5;
+      const k = snap ? 1 : 1 - Math.exp(-dt * Math.min(70, 20 + move * 500));
+      stage.position.lerp(pT, k); stage.quaternion.slerp(qT, k); stage.scale.lerp(sT.set(s, s, s), k);
+      snap = false; lastSeen = now;
+    }
+    const held = now - lastSeen < HOLD;
+    if (!held) snap = true;
+    if (wasHeld && !held) lostAt = now;
+    if (held && !wasHeld && W.started && now - lostAt > 1.5) { if (BOTTLE) { W.pick = (W.pick + 1) % FLAVORS.length; W.showPick(); W.getSkin(W.pick); } else resetWorld(W); } // re-scan = the whole show plays again
+    wasHeld = held;
+    W.root.visible = held && W.flavor !== null && W.flavor === W.want;
+    $('scan').classList.toggle('hide', held || !!a);
+    return held;
+  }
+
+  try { await mindar.start(); }
+  catch (e) { $('loading').classList.add('hide'); $('start').classList.remove('hide'); $('err').textContent = 'Could not open the camera' + (e && e.message ? ': ' + e.message : '') + '.'; return; }
+  $('loading').classList.add('hide'); $('scan').classList.remove('hide'); $('handle').classList.remove('hide');
+  window.__ar = { mindar, W };
+  (async () => { for (let i = 0; i < FLAVORS.length; i++) await W.getSkin(i).catch(() => {}); })(); // the rest load in the background
+  if (params.get('test') === 'away' && fakeVideo) (async () => { // dev: does the effect leave when the camera leaves the jar?
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms)), out = {};
+    for (let i = 0; i < 200 && !W.root.visible; i++) await wait(50);
+    fakeVideo.currentTime = 5; await wait(3000);
+    let vis = 0, flips = 0, last = W.root.visible; for (let i = 0; i < 120; i++) { await wait(25); if (W.root.visible) vis++; if (W.root.visible !== last) { flips++; last = W.root.visible; } }
+    out.steadyPct = Math.round(vis / 120 * 100); out.flips = flips;
+    fakeVideo.pause(); fakeVideo.currentTime = 0.1; const t0 = performance.now(); out.goneMs = -1;
+    for (let i = 0; i < 160; i++) { await wait(25); if (!W.root.visible) { out.goneMs = Math.round(performance.now() - t0); break; } }
+    fakeVideo.currentTime = 8; fakeVideo.play(); const t1 = performance.now(); out.backMs = -1;
+    for (let i = 0; i < 200; i++) { await wait(25); if (W.root.visible) { out.backMs = Math.round(performance.now() - t1); break; } }
+    document.title = 'RESULT ' + JSON.stringify(out);
+  })();
+
+  // recording: camera frame + 3D canvas + handle, into a 720x1280 webm
+  let rec = null, recCtx = null, recorder = null, chunks = [];
+  if (REC) {
+    rec = document.createElement('canvas'); rec.width = 720; rec.height = 1280; recCtx = rec.getContext('2d');
+    recorder = new MediaRecorder(rec.captureStream(30), { mimeType: 'video/webm;codecs=vp9', videoBitsPerSecond: 14e6 });
+    recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    recorder.onstop = async () => {
+      const blob = new Blob(chunks, { type: 'video/webm' });
+      const r = await fetch('/save?name=' + encodeURIComponent(params.get('record') || 'jar_demo.webm'), { method: 'POST', body: blob });
+      window.__recDone = await r.text();
+    };
+  }
+  if (fakeVideo) {
+    fakeVideo.currentTime = 0; await fakeVideo.play();
+    if (recorder) { recorder.start(500); fakeVideo.addEventListener('ended', () => setTimeout(() => recorder.stop(), 150), { once: true }); }
+  }
+
+  const clock = new THREE.Clock();
+  renderer.setAnimationLoop(() => {
+    const dt = Math.min(clock.getDelta(), 0.05);
+    const held = trackStage(dt, clock.elapsedTime);
+    if (W.want !== null && W.flavor !== W.want && W.ready[W.want]) { applySkin(W, W.want); resetWorld(W); W.started = true; window.__flavor = FLAVORS[W.flavor].id; }
+    const ready = W.flavor !== null && W.flavor === W.want;
+    try { if (W.started && held && ready) updateWorld(W, dt); }
+    catch (e) { if (!window.__err) { window.__err = String(e && e.stack || e); console.error(e); } }
+    if (params.has('debug')) { // dev readout in the window title: effect time, tracked slice, stage scale, first error
+      const a = anchors.findIndex((b) => b.visible);
+      document.title = `DBG t=${W.t.toFixed(2)} v=${fakeVideo ? fakeVideo.currentTime.toFixed(2) : '-'} fl=${W.flavor} slice=${a} held=${held} s=${stage.scale.x.toFixed(1)} cd=${(window.__camDist || 0).toFixed(2)} ${window.__err ? 'ERR ' + window.__err.slice(0, 160) : ''}`;
+    }
+    renderer.render(scene, camera);
+    if (recCtx) {
+      const v = mindar.video, cw = rec.width, ch = rec.height;
+      const s = Math.max(cw / v.videoWidth, ch / v.videoHeight), vw = v.videoWidth * s, vh = v.videoHeight * s;
+      recCtx.drawImage(v, (cw - vw) / 2, (ch - vh) / 2, vw, vh);
+      recCtx.drawImage(renderer.domElement, 0, 0, cw, ch);
+      recCtx.font = '900 44px "Segoe UI", system-ui, sans-serif'; recCtx.textAlign = 'center';
+      recCtx.lineWidth = 6; recCtx.strokeStyle = 'rgba(0,0,0,.6)'; recCtx.strokeText(HANDLE, cw / 2, ch - 70); recCtx.fillStyle = '#fff'; recCtx.fillText(HANDLE, cw / 2, ch - 70);
+      if (!found && !W.started) { // scan brackets before the jar is picked up
+        const b = 250, x0 = cw / 2 - b, y0 = ch / 2 - b, L = 60; recCtx.strokeStyle = '#fff'; recCtx.lineWidth = 7; recCtx.shadowColor = '#b46bff'; recCtx.shadowBlur = 14;
+        recCtx.beginPath();
+        recCtx.moveTo(x0, y0 + L); recCtx.lineTo(x0, y0); recCtx.lineTo(x0 + L, y0);
+        recCtx.moveTo(x0 + 2 * b - L, y0); recCtx.lineTo(x0 + 2 * b, y0); recCtx.lineTo(x0 + 2 * b, y0 + L);
+        recCtx.moveTo(x0, y0 + 2 * b - L); recCtx.lineTo(x0, y0 + 2 * b); recCtx.lineTo(x0 + L, y0 + 2 * b);
+        recCtx.moveTo(x0 + 2 * b - L, y0 + 2 * b); recCtx.lineTo(x0 + 2 * b, y0 + 2 * b); recCtx.lineTo(x0 + 2 * b, y0 + 2 * b - L);
+        recCtx.stroke(); recCtx.shadowBlur = 0;
+        recCtx.font = '800 34px "Segoe UI", system-ui, sans-serif'; recCtx.fillStyle = '#fff'; recCtx.fillText('Point at the front of the jar', cw / 2, y0 + 2 * b + 70);
+      }
+    }
+  });
+}
+$('go').addEventListener('click', start);
+if (params.has('autostart')) start();
+</script>
+</body>
+</html>
