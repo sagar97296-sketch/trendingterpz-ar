@@ -6,6 +6,38 @@
 <meta name="theme-color" content="#000000">
 <title>Scan the Jar</title>
 <script>/* phones only allow the camera on https: the old github.io link forwards here on plain http */ if (location.protocol === 'http:' && !/^(localhost|127\.|192\.168\.|10\.)/.test(location.hostname)) location.replace('https://' + location.host + location.pathname + location.search + location.hash);</script>
+<script>
+/* The big scan file (~10 MB) starts downloading the moment the page opens, while the start screen is up, not after the tap.
+   window.__load: mind / world = 0..1 progress, done = everything downloaded, live = scanner running. */
+/* Two scan files: jars_front.mind (the front of the 4 jars, 1.4 MB) comes first so the scanner is ready in a second or two;
+   jars360.mind (all the way round, 10 MB) follows in the background and is swapped in while no jar is in view. */
+(function () {
+  var q = new URLSearchParams(location.search);
+  var full = q.get('mind') || (q.has('bottle') ? 'targets/bottle.mind' : 'targets/jars360.mind');
+  var quick = !q.get('mind') && !q.has('bottle') && !q.has('only') && !q.has('noquick');
+  var RAW = { 'targets/jars360.mind': 17757892, 'targets/jars_front.mind': 2324663, 'targets/bottle.mind': 823629 };   // unzipped sizes (the server gzips, so its length header is the zipped size)
+  var P = window.__load = { mind: 0, full: 0, world: 0, quick: quick, fullSrc: full, t0: Date.now(), wm: quick ? 0.45 : 0.72 };
+  P.grab = function (src, key) {
+    var p = fetch(src).then(function (r) {
+      if (!r.ok) throw new Error('scan file ' + r.status);
+      var total = RAW[src] || (r.headers.get('content-encoding') ? 0 : +r.headers.get('content-length')) || 0;
+      if (!r.body || !r.body.getReader) return r.arrayBuffer().then(function (b) { P[key] = 1; return b; });
+      var rd = r.body.getReader(), parts = [], got = 0;
+      return (function pump() { return rd.read().then(function (x) {
+        if (x.done) { P[key] = 1; var out = new Uint8Array(got), o = 0; parts.forEach(function (c) { out.set(c, o); o += c.length; }); return out.buffer; }
+        parts.push(x.value); got += x.value.length; P[key] = total ? Math.min(0.99, got / total) : Math.min(0.9, P[key] + 0.01); return pump();
+      }); })();
+    });
+    p.catch(function () { if (key === 'mind') P.err = true; });
+    return p;
+  };
+  P.mindBuf = P.grab(quick ? 'targets/jars_front.mind' : full, 'mind');
+})();
+</script>
+<link rel="modulepreload" href="./vendor/three/three.module.js">
+<link rel="modulepreload" href="./vendor/mindar/mindar-image-three.prod.js">
+<link rel="modulepreload" href="./vendor/mindar/controller-mGt1s8dJ.js">
+<link rel="modulepreload" href="./vendor/three/addons/loaders/GLTFLoader.js">
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #fff; }
   #ar { position: fixed; inset: 0; }
@@ -30,7 +62,20 @@
   @keyframes pulse { 50% { transform: scale(1.06); opacity: .75; } }
   #handle { position: fixed; left: 0; right: 0; bottom: max(22px, env(safe-area-inset-bottom)); z-index: 11; text-align: center; pointer-events: none;
     font-weight: 900; font-size: clamp(22px, 7vw, 32px); -webkit-text-stroke: 1.5px rgba(0,0,0,.55); text-shadow: 0 3px 0 rgba(0,0,0,.35); }
-  #loading { position: fixed; inset: 0; z-index: 15; display: flex; align-items: center; justify-content: center; background: #000; font-weight: 700; }
+  /* loader: on the start screen under the button, then a pill over the live camera after the tap */
+  #ld { width: min(72vw, 280px); margin-top: 6px; z-index: 25;
+    display: flex; flex-direction: column; align-items: center; gap: 9px; pointer-events: none; transition: opacity .4s; }
+  #ld.cam { position: fixed; left: 50%; top: 50%; margin: 0; transform: translate(-50%, -50%); width: min(78vw, 300px); padding: 16px 20px 14px; border-radius: 20px; background: rgba(10,4,24,.6); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  #ld.gone { opacity: 0; }
+  #ldBar { width: 100%; height: 8px; border-radius: 99px; background: rgba(255,255,255,.14); overflow: hidden; }
+  #ldFill { height: 100%; width: 0; border-radius: 99px; background: linear-gradient(90deg, #b46bff, #ff5fd2 55%, #ffb84d);
+    box-shadow: 0 0 12px rgba(255,95,210,.7); position: relative; overflow: hidden; }
+  #ldFill::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent); transform: translateX(-100%); animation: shine 1.3s linear infinite; }
+  @keyframes shine { to { transform: translateX(100%); } }
+  #ldTxt { font-size: 13px; font-weight: 700; letter-spacing: .02em; opacity: .85; font-variant-numeric: tabular-nums; }
+  #ld.err { pointer-events: auto; cursor: pointer; } #ld.err #ldFill { background: #ff6b6b; box-shadow: none; }
+  #go.ready { animation: ready 1.4s ease-in-out infinite; }
+  @keyframes ready { 50% { transform: scale(1.05); box-shadow: 0 0 0 7px rgba(255,184,77,.32), 0 10px 50px rgba(180,90,255,.7); } }
   body.rec #scan, body.rec #handle { display: none !important; }
   #pick { position: fixed; left: 0; right: 0; top: max(14px, env(safe-area-inset-top)); z-index: 12; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; padding: 0 12px; }
   #pick button { border: 0; border-radius: 999px; padding: 9px 14px; font: 800 14px system-ui, sans-serif; color: #fff; background: rgba(0,0,0,.55); backdrop-filter: blur(6px); box-shadow: inset 0 0 0 2px rgba(255,255,255,.35); }
@@ -51,8 +96,36 @@
   <p>Point your camera at the front of the jar and get ready for the ride.</p>
   <button id="go">Start camera</button>
   <div id="err"></div>
+<div id="ld"><div id="ldBar"><div id="ldFill"></div></div><div id="ldTxt">Loading…</div></div>
+<script>
+/* The bar is honest about what's left but feels quick: it fills fast at first and eases in near the end (real progress is
+   bent by 1-(1-r)^1.7), it jumps to ~15% within the first second, and it creeps a little so it never looks frozen. */
+(function () {
+  var P = window.__load, fill = document.getElementById('ldFill'), txt = document.getElementById('ldTxt'), box = document.getElementById('ld');
+  var shown = 0, creep = 0, last = performance.now(), t0 = last;
+  box.onclick = function () { if (P.err) location.reload(); };
+  function frame(now) {
+    var dt = Math.min(0.1, (now - last) / 1000); last = now;
+    if (P.live) { box.classList.add('gone'); setTimeout(function () { box.classList.add('hide'); }, 450); return; }
+    var real = P.wm * P.mind + (1 - P.wm) * P.world;          // weighted by download size
+    var target = Math.max(1 - Math.pow(1 - real, 1.7), Math.min(0.15, (now - t0) / 900 * 0.15));
+    creep = Math.min(creep + dt * 0.006, 0.05);                  // at most 5% ahead of the real thing
+    var goal = P.done ? 1 : Math.min(0.97, target + creep);
+    if (goal > shown) shown += (goal - shown) * Math.min(1, dt * (P.done ? 9 : 5));
+    fill.style.width = (shown * 100).toFixed(1) + '%';
+    var pc = Math.round(shown * 100) + '%';
+    if (P.err) { box.classList.add('err'); txt.textContent = 'Connection problem. Tap to try again'; }
+    else if (P.warm && P.done) txt.textContent = 'Almost ready…';
+    else if (P.started) txt.textContent = (P.mind < 1 ? 'Getting the scanner ready… ' : 'Loading the 3D jar… ') + pc;
+    else if (P.done && shown > 0.985) { txt.textContent = 'Ready! Tap Start'; document.getElementById('go').classList.add('ready'); }
+    else txt.textContent = (P.mind < 1 ? 'Loading the scanner… ' : 'Loading the 3D jar… ') + pc;
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
 </div>
-<div id="loading" class="hide">Starting camera…</div>
+
 <div id="scan" class="hide"><div id="frame"><i></i><i></i><i></i><i></i></div><span>Point at the front of the jar</span></div>
 <div id="handle" class="hide">@trendingterpz</div>
 <div id="pick" class="hide"></div>
@@ -305,7 +378,7 @@ function neonEnv(renderer) {
 }
 const TRAIN = { L: 0.40, BOGIE: 0.132 };   // car length, bogie offset from the car centre (car units)
 async function buildTrain(renderer, cars = 5) {
-  const gltf = await new GLTFLoader().loadAsync('jar/train/train.glb');
+  const gltf = await new GLTFLoader().loadAsync('jar/train/train.glb', (e) => { window.__load.world = Math.min(0.8, 0.8 * e.loaded / 3673884); });   // file size, for the loading bar
   const env = neonEnv(renderer);
   const masks = { Side: 'side_emit', Front: 'front_emit', Rear: 'rear_emit' }, mt = {};
   for (const [k, f] of Object.entries(masks)) { mt[k] = await loadTex('jar/train/tex/' + f + '.jpg'); mt[k].flipY = false; }
@@ -486,8 +559,8 @@ async function mkDecal(W, tex, spec, t0) {
 // everything that is different per flavor: product shots, the flavor-name lettering, the pieces that fly out
 async function loadSkin(W, i) {
   const F = FLAVORS[i], dir = 'jar/flavors/' + F.id + '/';
-  const [closed, open, cap, nameTex] = await Promise.all(['card_closed', 'card_open', 'card_cap', 'name'].map((n) => loadTex(dir + n + '.png')));
-  W.brandTex = W.brandTex || loadTex('jar/brand_text.png');
+  const [closed, open, cap, nameTex] = await Promise.all(['card_closed', 'card_open', 'card_cap', 'name'].map((n) => loadTex(dir + n + '.webp')));   // WebP: ~10x smaller than the PNGs (cards lossy q90, lettering lossless)
+  W.brandTex = W.brandTex || loadTex('jar/brand_text.webp');
   const sk = { closed, open, cap, brand: await mkDecal(W, await W.brandTex, F.brand, 0.3), name: await mkDecal(W, nameTex, F.name, 0.7), fountain: new Fountain(W.root, W.J, F.mix) };
   sk.fountain.group.visible = false;
   return sk;
@@ -531,7 +604,7 @@ async function buildJarWorld(stage, renderer) {
   const tr = await buildTrain(renderer, 4); W.cars = tr.cars; W.carL = tr.L; W.cars.forEach((c) => root.add(c));
 
   // brand badge: rises out of the open jar to the top
-  const tex = await loadTex('jar/trending_terpz_logo.png');
+  const tex = await loadTex('jar/trending_terpz_logo.webp');
   W.logo = new THREE.Mesh(new THREE.PlaneGeometry(LOGO_W, LOGO_W),
     new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.01, toneMapped: false, side: THREE.DoubleSide, depthTest: false, depthWrite: false }));
   W.logo.renderOrder = 10; W.logoY = J.top + LOGO_Y; W.logo.position.set(0, W.logoY, J.axisZ); W.logo.visible = false; root.add(W.logo);
@@ -626,19 +699,60 @@ function updateWorld(W, dt) {
 }
 
 /* ------------------------------------------------ AR + recording */
+// Everything that doesn't need the camera starts the moment the page opens: the scan file (head script), then the 3D jar,
+// then the 4 flavor skins. The tap only has to open the camera and start the scanner.
+const LOAD = window.__load;
+const mindar = new MindARThree({ container: $('ar'), imageTargetSrc: TARGET, maxTrack: 1, uiLoading: 'no', uiScanning: 'no', uiError: 'no',
+  filterMinCF: 0.001, filterBeta: 0.06, warmupTolerance: 2, missTolerance: 4 }); // beta up = less lag on fast moves; we smooth small shake ourselves
+const { renderer, scene, camera } = mindar;
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+scene.add(new THREE.HemisphereLight(0xfff4e0, 0x402060, 2.0));
+{ const sun = new THREE.DirectionalLight(0xffffff, 2.4); sun.position.set(0.4, 1.2, 1.4); scene.add(sun); }
+// 8 slices of the label per flavor so it keeps tracking all the way round
+const anchors = BOTTLE ? [mindar.addAnchor(0)] : ONLY !== null ? [...Array(SLICES).keys()].map((k) => mindar.addAnchor(k)) : FLAVORS.flatMap((_, f) => [...Array(SLICES).keys()].map((k) => mindar.addAnchor(f * SLICES + k)));
+// the effect lives on a smoothed "stage", not on the raw anchor: no jitter, and it rides through short dropouts
+const stage = new THREE.Group(); stage.matrixAutoUpdate = true; scene.add(stage);
+// the 3D jar downloads after the scan file (one at a time = the scanner is ready sooner), then the flavor skins in the background
+const worldP = LOAD.mindBuf.catch(() => {}).then(() => buildJarWorld(stage, renderer)).then((W) => {
+  LOAD.world = 1; LOAD.done = true;
+  if (LOAD.quick) LOAD.fullBuf = LOAD.grab(LOAD.fullSrc, 'full');   // the all-round file, in the background
+  (async () => { for (let i = 0; i < FLAVORS.length; i++) await W.getSkin(i).catch(() => {}); })();
+  return W;
+});
+worldP.catch((e) => { LOAD.err = true; console.error(e); });
+// quick mode: the front file has 4 targets (target f = flavor f's front), so only the front anchor of each flavor listens
+const useFront = () => anchors.forEach((a, i) => { a.targetIndex = i % SLICES === 0 ? i / SLICES : -1; });
+const useFull = () => anchors.forEach((a, i) => { a.targetIndex = i; });
+let scanMode = 'full';
+// swap the all-round targets into the running scanner: pause it between frames, load, resume (no new camera, no GPU warm-up)
+async function upgradeScanner(buf) {
+  const ctl = mindar.controller;
+  await new Promise((r) => { const prev = ctl.onUpdate; let done = false;
+    ctl.onUpdate = (d) => { prev(d); if (d.type === 'processDone' && !done) { done = true; ctl.stopProcessVideo(); requestAnimationFrame(() => requestAnimationFrame(r)); } };
+    setTimeout(() => { if (!done) { done = true; ctl.stopProcessVideo(); setTimeout(r, 100); } }, 600);
+    ctl.__restore = () => { ctl.onUpdate = prev; }; });
+  ctl.__restore();
+  anchors.forEach((a) => { a.group.visible = false; if (a.visible) { a.visible = false; a.onTargetLost && a.onTargetLost(); } });
+  const { dimensions } = ctl.addImageTargetsFromBuffer(buf);
+  mindar.postMatrixs = dimensions.map(([w, h]) => new THREE.Matrix4().compose(new THREE.Vector3(w / 2, w / 2 + (h - w) / 2, 0), new THREE.Quaternion(), new THREE.Vector3(w, w, w)));
+  useFull(); scanMode = 'full';
+  ctl.processVideo(mindar.video);
+}
+
+let starting = false;
 async function start() {
-  $('start').classList.add('hide'); $('loading').classList.remove('hide');
-  const mindar = new MindARThree({ container: $('ar'), imageTargetSrc: TARGET, maxTrack: 1, uiLoading: 'no', uiScanning: 'no', uiError: 'no',
-    filterMinCF: 0.001, filterBeta: 0.06, warmupTolerance: 2, missTolerance: 4 }); // beta up = less lag on fast moves; we smooth small shake ourselves
-  const { renderer, scene, camera } = mindar;
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-  scene.add(new THREE.HemisphereLight(0xfff4e0, 0x402060, 2.0));
-  const sun = new THREE.DirectionalLight(0xffffff, 2.4); sun.position.set(0.4, 1.2, 1.4); scene.add(sun);
-  // three slices of the label (front, left, right) so it keeps tracking while the jar turns
-  const anchors = BOTTLE ? [mindar.addAnchor(0)] : ONLY !== null ? [...Array(SLICES).keys()].map((k) => mindar.addAnchor(k)) : FLAVORS.flatMap((_, f) => [...Array(SLICES).keys()].map((k) => mindar.addAnchor(f * SLICES + k)));
-  // the effect lives on a smoothed "stage", not on the raw anchor: no jitter, and it rides through short dropouts
-  const stage = new THREE.Group(); stage.matrixAutoUpdate = true; scene.add(stage);
-  const W = await buildJarWorld(stage, renderer); W.cam = camera; W.pick = 0;
+  if (starting) return; starting = true;
+  document.body.appendChild($('ld')); $('start').classList.add('hide'); $('ld').classList.add('cam'); LOAD.started = true;
+  try { await mindar._startVideo(); }   // MindAR's start() = _startVideo + _startAR; split so the camera shows while the scanner loads
+  catch (e) { starting = false; LOAD.started = false; $('ld').classList.remove('cam'); $('start').insertBefore($('ld'), $('err').nextSibling); $('start').classList.remove('hide'); $('err').textContent = 'Could not open the camera' + (e && e.message ? ': ' + e.message : '') + '.'; return; }
+  Object.assign(mindar.video.style, { width: '100%', height: '100%', objectFit: 'cover' });   // fill the screen now; MindAR sizes it exactly once the scanner is up
+  let buf; try { buf = await LOAD.mindBuf; } catch (e) { return; }   // the loader shows "tap to try again"
+  if (LOAD.quick && LOAD.full >= 1) buf = await LOAD.fullBuf;          // the all-round file already arrived: start with it
+  else if (LOAD.quick) { useFront(); scanMode = 'front'; }
+  mindar.imageTargetSrc = URL.createObjectURL(new Blob([buf]));
+  LOAD.warm = true;   // "Almost ready…": the scanner unpacks the file and warms up the GPU
+  const [W] = await Promise.all([worldP, mindar._startAR()]);
+  W.cam = camera; W.pick = 0;
   if (BOTTLE) { // scale the whole show so the jar stands over the bottle, axis on the bottle's axis
     const J = W.J, k = (BOT.top - BOT.bottom) / (J.top - J.bottom);
     W.root.scale.setScalar(k); W.root.position.set(0, BOT.bottom - k * J.bottom, k * J.R - BOT.R);
@@ -681,17 +795,21 @@ async function start() {
     if (!held) snap = true;
     if (wasHeld && !held) lostAt = now;
     if (held && !wasHeld && W.started && now - lostAt > 1.5) { if (BOTTLE) { W.pick = (W.pick + 1) % FLAVORS.length; W.showPick(); W.getSkin(W.pick); } else resetWorld(W); } // re-scan = the whole show plays again
-    wasHeld = held;
+    wasHeld = held; W.held = held;
     W.root.visible = held && W.flavor !== null && W.flavor === W.want;
     $('scan').classList.toggle('hide', held || !!a);
     return held;
   }
 
-  try { await mindar.start(); }
-  catch (e) { $('loading').classList.add('hide'); $('start').classList.remove('hide'); $('err').textContent = 'Could not open the camera' + (e && e.message ? ': ' + e.message : '') + '.'; return; }
-  $('loading').classList.add('hide'); $('scan').classList.remove('hide'); $('handle').classList.remove('hide');
+  LOAD.live = true; $('scan').classList.remove('hide'); $('handle').classList.remove('hide');
   window.__ar = { mindar, W };
-  (async () => { for (let i = 0; i < FLAVORS.length; i++) await W.getSkin(i).catch(() => {}); })(); // the rest load in the background
+  if (params.has('debug')) console.log('LOADTIME', JSON.stringify({ live: Date.now() - LOAD.t0, mode: scanMode }));
+  if (scanMode === 'front') (async () => {   // swap in the all-round file once it's here and no jar is in view (so the show is never cut)
+    const full = await LOAD.fullBuf.catch(() => null); if (!full) return;
+    while (W.held) await new Promise((r) => setTimeout(r, 200));
+    await upgradeScanner(full); window.__upgraded = Date.now() - LOAD.t0;
+    if (params.has('debug')) console.log('LOADTIME', JSON.stringify({ upgraded: window.__upgraded }));
+  })();
   if (params.get('test') === 'away' && fakeVideo) (async () => { // dev: does the effect leave when the camera leaves the jar?
     const wait = (ms) => new Promise((r) => setTimeout(r, ms)), out = {};
     for (let i = 0; i < 200 && !W.root.visible; i++) await wait(50);
@@ -732,7 +850,7 @@ async function start() {
     catch (e) { if (!window.__err) { window.__err = String(e && e.stack || e); console.error(e); } }
     if (params.has('debug')) { // dev readout in the window title: effect time, tracked slice, stage scale, first error
       const a = anchors.findIndex((b) => b.visible);
-      document.title = `DBG t=${W.t.toFixed(2)} v=${fakeVideo ? fakeVideo.currentTime.toFixed(2) : '-'} fl=${W.flavor} slice=${a} held=${held} s=${stage.scale.x.toFixed(1)} cd=${(window.__camDist || 0).toFixed(2)} ${window.__err ? 'ERR ' + window.__err.slice(0, 160) : ''}`;
+      document.title = `DBG t=${W.t.toFixed(2)} v=${fakeVideo ? fakeVideo.currentTime.toFixed(2) : '-'} fl=${W.flavor} slice=${a} held=${held} s=${stage.scale.x.toFixed(1)} cd=${(window.__camDist || 0).toFixed(2)} m=${scanMode} ${window.__err ? 'ERR ' + window.__err.slice(0, 160) : ''}`;
     }
     renderer.render(scene, camera);
     if (recCtx) {
