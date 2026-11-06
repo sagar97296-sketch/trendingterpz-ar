@@ -8,7 +8,9 @@
      Each drop lives in its own folder: /jars/ = the 4-flavor jar drop. To make a new drop the default, change CURRENT. -->
 <script>
   var CURRENT = 'jars/';
-  location.replace(CURRENT + location.search + location.hash);
+  if (location.protocol === 'http:' && !/^(localhost|127\.|192\.168\.|10\.)/.test(location.hostname))  // camera needs https
+    location.replace('https://' + location.host + location.pathname.replace(/[^/]*$/, '') + CURRENT + location.search + location.hash);
+  else location.replace(CURRENT + location.search + location.hash);
 </script>
 <meta http-equiv="refresh" content="0; url=jars/">
 <style>html,body{margin:0;height:100%;background:#000;color:#fff;font:700 16px system-ui,sans-serif;display:flex;align-items:center;justify-content:center}a{color:#ffb84d}</style>
