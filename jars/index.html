@@ -116,9 +116,8 @@
     var pc = Math.round(shown * 100) + '%';
     if (P.err) { box.classList.add('err'); txt.textContent = 'Connection problem. Tap to try again'; }
     else if (P.warm && P.done) txt.textContent = 'Almost ready…';
-    else if (P.started) txt.textContent = (P.mind < 1 ? 'Getting the scanner ready… ' : 'Loading the 3D jar… ') + pc;
-    else if (P.done && shown > 0.985) { txt.textContent = 'Ready! Tap Start'; document.getElementById('go').classList.add('ready'); }
-    else txt.textContent = (P.mind < 1 ? 'Loading the scanner… ' : 'Loading the 3D jar… ') + pc;
+    else if (P.done && shown > 0.985 && !P.started) { txt.textContent = 'Ready! Tap Start'; document.getElementById('go').classList.add('ready'); }
+    else txt.textContent = 'Loading… ' + pc;   // plain words for customers: no "scanner" / "3D jar"
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
